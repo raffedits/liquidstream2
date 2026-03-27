@@ -1,0 +1,1387 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LiquidStream IPTV</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+      body {
+        font-family: 'Inter', sans-serif;
+        background-color: #0f172a;
+        color: white;
+        overflow: hidden;
+      }
+      
+      .mesh-bg {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        z-index: -1;
+        background: radial-gradient(at 0% 0%, hsla(253,16%,7%,1) 0, transparent 50%), 
+                    radial-gradient(at 50% 0%, hsla(225,39%,30%,1) 0, transparent 50%), 
+                    radial-gradient(at 100% 0%, hsla(339,49%,30%,1) 0, transparent 50%);
+        background-size: 200% 200%;
+        animation: gradient-move 15s ease infinite;
+      }
+
+      .blob {
+        position: absolute;
+        filter: blur(80px);
+        opacity: 0.6;
+        animation: float 10s infinite ease-in-out;
+        border-radius: 50%;
+      }
+
+      .blob-1 { top: 10%; left: 10%; width: 300px; height: 300px; background: #7c3aed; animation-delay: 0s; }
+      .blob-2 { bottom: 20%; right: 10%; width: 400px; height: 400px; background: #db2777; animation-delay: -2s; }
+      .blob-3 { top: 40%; left: 40%; width: 250px; height: 250px; background: #2563eb; animation-delay: -4s; }
+
+      @keyframes float {
+        0% { transform: translate(0, 0) scale(1); }
+        33% { transform: translate(30px, -50px) scale(1.1); }
+        66% { transform: translate(-20px, 20px) scale(0.9); }
+        100% { transform: translate(0, 0) scale(1); }
+      }
+
+      @keyframes gradient-move {
+        0% { background-position: 0% 50%; }
+        50% { background-position: 100% 50%; }
+        100% { background-position: 0% 50%; }
+      }
+
+      .glass-scroll::-webkit-scrollbar {
+        width: 6px;
+      }
+      .glass-scroll::-webkit-scrollbar-track {
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 10px;
+      }
+      .glass-scroll::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.2);
+        border-radius: 10px;
+      }
+      .glass-scroll::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.4);
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://esm.sh/react@18.2.0/",
+    "react": "https://esm.sh/react@18.2.0",
+    "lucide-react": "https://esm.sh/lucide-react@0.344.0",
+    "react-dom/": "https://esm.sh/react-dom@18.2.0/",
+    "react-dom": "https://esm.sh/react-dom@18.2.0",
+    "hls.js": "https://esm.sh/hls.js@^1.6.15",
+    "react-window": "https://esm.sh/react-window@1.8.10?deps=react@18.2.0,react-dom@18.2.0",
+    "react-virtualized-auto-sizer": "https://esm.sh/react-virtualized-auto-sizer@1.0.24?deps=react@18.2.0,react-dom@18.2.0"
+  }
+}
+</script>
+</head>
+  <body>
+    <div id="root"></div>
+  <script type="module">
+// =============================================
+// types.ts (inlined)
+// =============================================
+
+// =============================================
+// services/parser.ts (inlined)
+// =============================================
+const parseM3U = (content) => {
+  const lines = content.split('\n');
+  const channels = [];
+  const groups = new Set();
+
+  let currentChannel = {};
+
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+
+    if (trimmed.startsWith('#EXTINF:')) {
+      currentChannel = {};
+      
+      const nameMatch = trimmed.match(/tvg-name="([^"]*)"/i);
+      const logoMatch = trimmed.match(/tvg-logo="([^"]*)"/i);
+      const groupMatch = trimmed.match(/group-title="([^"]*)"/i);
+      const displayNameMatch = trimmed.match(/,(.+)$/);
+
+      currentChannel.name = nameMatch ? nameMatch[1] : (displayNameMatch ? displayNameMatch[1].trim() : 'Unknown Channel');
+      currentChannel.logo = logoMatch ? logoMatch[1] : undefined;
+      currentChannel.group = groupMatch ? groupMatch[1] : 'Uncategorized';
+      
+      groups.add(currentChannel.group);
+      
+    } else if (!trimmed.startsWith('#')) {
+      const name = currentChannel.name || trimmed.split('/').pop() || `Channel ${channels.length + 1}`;
+      const group = currentChannel.group || 'Uncategorized';
+      
+      channels.push({
+        id: `ch-${channels.length}-${Date.now()}`,
+        name: name,
+        logo: currentChannel.logo,
+        group: group,
+        url: trimmed,
+        status: 'unknown'
+      });
+      
+      groups.add(group);
+      currentChannel = {};
+    }
+  });
+
+  return {
+    channels,
+    groups: Array.from(groups).sort()
+  };
+};
+
+const checkStreamHealth = async (url) => {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
+    const response = await fetch(url, { 
+      method: 'HEAD', 
+      signal: controller.signal,
+      mode: 'no-cors'
+    });
+    clearTimeout(timeoutId);
+    return 'online';
+  } catch (error) {
+    return 'offline';
+  }
+};
+
+// =============================================
+// components/VideoPlayer.tsx (inlined)
+// =============================================
+// =============================================
+// App.tsx (inlined)
+// =============================================
+
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import ReactDOM from 'react-dom/client';
+import Hls from 'hls.js';
+import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, AlertCircle, Loader2, X, Search, Tv, Heart, Menu, Link as LinkIcon, Upload, Plus, Trash2, FolderOpen, ChevronDown, Disc, Download, StopCircle, Cast } from 'lucide-react';
+import { FixedSizeList as List } from 'react-window';
+import AutoSizer from 'react-virtualized-auto-sizer';
+
+// ── PeerJS loader (same as MirrorLink) ──
+const PFX = 'ml-v3-';
+let _peerPromise = null;
+function loadPeerJS() {
+  if (typeof Peer !== 'undefined') return Promise.resolve();
+  if (_peerPromise) return _peerPromise;
+  _peerPromise = new Promise((ok, fail) => {
+    function load(u, fb) {
+      const s = document.createElement('script'); s.src = u;
+      s.onload = ok;
+      s.onerror = () => fb ? load(fb, null) : fail(new Error('PeerJS unavailable'));
+      document.head.appendChild(s);
+    }
+    load('https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js',
+         'https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js');
+  });
+  return _peerPromise;
+}
+loadPeerJS().catch(() => {});
+
+// ── CastService: streams a MediaStream to a MirrorLink receiver ──
+class CastService {
+  constructor() { this.p = null; this.call = null; this.dc = null; this.dead = false; this.ls = null; this.mi = null; }
+  _setup() {
+    return new Promise(res => {
+      if (this.p && !this.p.destroyed) { if (this.p.disconnected) this.p.reconnect(); res(); return; }
+      const ICE = [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }];
+      const p = new Peer(undefined, { debug: 0, config: { iceServers: ICE } });
+      p.on('open', () => { this._keepAlive(); res(); });
+      p.on('error', e => console.warn('[CS]', e));
+      p.on('disconnected', () => { if (!this.dead) p.reconnect(); });
+      this.p = p;
+    });
+  }
+  _keepAlive() {
+    if (this.mi) clearInterval(this.mi);
+    this.mi = setInterval(() => { if (this.p && !this.p.destroyed && this.p.disconnected) try { this.p.reconnect(); } catch (e) {} }, 5000);
+  }
+  async connectAndStream(code, stream) {
+    this.ls = stream;
+    const tid = PFX + code;
+    await this._setup();
+    await new Promise((ok, fail) => {
+      const c = this.p.connect(tid, { reliable: true });
+      this.dc = c;
+      const t = setTimeout(() => fail(new Error('DC timeout')), 15000);
+      const hb = setInterval(() => { if (c.open) try { c.send({ type: 'PING' }); } catch (e) {} else clearInterval(hb); }, 2000);
+      c.on('open', () => { clearTimeout(t); if (this.call) try { this.call.close(); } catch (e) {} this.call = this.p.call(tid, stream); ok(); });
+      c.on('error', e => { clearTimeout(t); clearInterval(hb); fail(e); });
+    });
+  }
+  destroy() {
+    this.dead = true;
+    if (this.mi) clearInterval(this.mi);
+    if (this.call) try { this.call.close(); } catch (e) {}
+    if (this.dc) try { this.dc.close(); } catch (e) {}
+    if (this.ls) try { this.ls.getTracks().forEach(t => t.stop()); } catch (e) {}
+    if (this.p) try { this.p.destroy(); } catch (e) {}
+    this.p = null; this.ls = null;
+  }
+}
+
+// --- VideoPlayer Component ---
+
+const VideoPlayer = ({ url, title, onClose }) => {
+  const videoRef = useRef(null);
+  const containerRef = useRef(null);
+  const canvasRef = useRef(null);
+  const animationFrameRef = useRef(null);
+
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const [volume, setVolume] = useState(1);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [hlsInstance, setHlsInstance] = useState(null);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const controlsTimeoutRef = useRef(null);
+  const retryCountRef = useRef(0);
+
+  // Recording State
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const [showSavePrompt, setShowSavePrompt] = useState(false);
+  const [recordingBlob, setRecordingBlob] = useState(null);
+
+  // Cast State
+  const [showCastModal, setShowCastModal] = useState(false);
+  const [castCode, setCastCode] = useState('');
+  const [isCasting, setIsCasting] = useState(false);
+  const [castStatus, setCastStatus] = useState('');
+  const castServiceRef = useRef(null);
+
+  useEffect(() => {
+    let hls = null;
+    const video = videoRef.current;
+    
+    retryCountRef.current = 0;
+
+    if (!video) return;
+
+    setLoading(true);
+    setError(null);
+
+    const handleManifestParsed = () => {
+      setLoading(false);
+      video.play().catch(e => console.error("Auto-play blocked", e));
+      setIsPlaying(true);
+    };
+
+    const handleError = (_event, data) => {
+      if (data.fatal) {
+        switch (data.type) {
+          case Hls.ErrorTypes.NETWORK_ERROR:
+            console.error("Network error encountered", data);
+            if (retryCountRef.current < 3) {
+              retryCountRef.current++;
+              console.log(`Retrying network error... Attempt ${retryCountRef.current}/3`);
+              hls?.startLoad();
+            } else {
+              hls?.destroy();
+              setError("Network Error: Stream unavailable, CORS blocked, or Mixed Content.");
+              setLoading(false);
+            }
+            break;
+          case Hls.ErrorTypes.MEDIA_ERROR:
+            console.error("Media error encountered");
+            hls?.recoverMediaError();
+            break;
+          default:
+            hls?.destroy();
+            setError("Stream error: " + data.details);
+            setLoading(false);
+            break;
+        }
+      }
+    };
+
+    if (Hls.isSupported()) {
+      hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: false,
+        backBufferLength: 90,
+        maxBufferLength: 60,
+        maxMaxBufferLength: 600,
+        manifestLoadingTimeOut: 20000,
+        manifestLoadingMaxRetry: 5,
+        levelLoadingTimeOut: 20000,
+        levelLoadingMaxRetry: 5,
+        fragLoadingTimeOut: 30000,
+        fragLoadingMaxRetry: 5,
+        startLevel: -1,
+      });
+      hls.loadSource(url);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, handleManifestParsed);
+      hls.on(Hls.Events.ERROR, handleError);
+      setHlsInstance(hls);
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = url;
+      video.addEventListener('loadedmetadata', handleManifestParsed);
+      video.addEventListener('error', () => {
+        setError("Native playback error.");
+        setLoading(false);
+      });
+    } else {
+      setError("HLS is not supported in this browser.");
+      setLoading(false);
+    }
+
+    return () => {
+      if (hls) hls.destroy();
+      if (video) {
+        video.removeEventListener('loadedmetadata', handleManifestParsed);
+        video.removeAttribute('src'); 
+        video.load();
+      }
+    };
+  }, [url]);
+
+  const togglePlay = () => {
+    if (videoRef.current) {
+      if (isPlaying) {
+        videoRef.current.pause();
+      } else {
+        videoRef.current.play();
+      }
+      setIsPlaying(!isPlaying);
+    }
+  };
+
+  const toggleMute = () => {
+    if (videoRef.current) {
+      videoRef.current.muted = !isMuted;
+      setIsMuted(!isMuted);
+    }
+  };
+
+  const handleVolumeChange = (e) => {
+    const newVolume = parseFloat(e.target.value);
+    setVolume(newVolume);
+    if (videoRef.current) {
+      videoRef.current.volume = newVolume;
+      setIsMuted(newVolume === 0);
+    }
+  };
+
+  const toggleFullscreen = () => {
+    if (!containerRef.current) return;
+    if (!document.fullscreenElement) {
+      containerRef.current.requestFullscreen().catch(err => console.error(err));
+      setIsFullscreen(true);
+    } else {
+      document.exitFullscreen();
+      setIsFullscreen(false);
+    }
+  };
+
+  const handleMouseMove = useCallback(() => {
+    setControlsVisible(true);
+    if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+    controlsTimeoutRef.current = setTimeout(() => {
+      if (isPlaying && !showSavePrompt) setControlsVisible(false);
+    }, 2500);
+  }, [isPlaying, showSavePrompt]);
+
+  const handleRetry = () => {
+    setLoading(true);
+    setError(null);
+    retryCountRef.current = 0;
+    if (hlsInstance) {
+      hlsInstance.loadSource(url);
+      hlsInstance.startLoad();
+    } else if (videoRef.current) {
+      videoRef.current.src = url;
+      videoRef.current.load();
+    }
+  };
+
+  // --- Optimized 60FPS Recording Logic ---
+  const startRecording = () => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth || 1280;
+      canvas.height = video.videoHeight || 720;
+      
+      const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+      canvasRef.current = canvas;
+
+      const draw = () => {
+        if (!video || !ctx || video.paused || video.ended) return;
+        try {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          animationFrameRef.current = requestAnimationFrame(draw);
+        } catch (e) {
+          console.warn("Frame draw failed");
+        }
+      };
+
+      let stream = null;
+
+      try {
+        ctx?.drawImage(video, 0, 0, canvas.width, canvas.height);
+        draw();
+        stream = canvas.captureStream(60);
+        
+        const videoStreamRaw = video.captureStream ? video.captureStream() : video.mozCaptureStream ? video.mozCaptureStream() : null;
+        if (videoStreamRaw && videoStreamRaw.getAudioTracks().length > 0) {
+           stream.addTrack(videoStreamRaw.getAudioTracks()[0]);
+        }
+      } catch (err) {
+        console.log("Canvas SecurityError, falling back to direct stream.");
+        stream = video.captureStream ? video.captureStream(60) : video.mozCaptureStream ? video.mozCaptureStream(60) : null;
+      }
+
+      if (!stream) {
+        setError("Browser does not support capturing this stream.");
+        return;
+      }
+
+      const mimeTypes = [
+        "video/webm;codecs=h264", 
+        "video/mp4;codecs=avc1",
+        "video/webm;codecs=vp8",
+        "video/webm"
+      ];
+      
+      const selectedMimeType = mimeTypes.find(type => MediaRecorder.isTypeSupported(type)) || "";
+
+      const options = { 
+        mimeType: selectedMimeType,
+        videoBitsPerSecond: 5000000 
+      };
+
+      const recorder = new MediaRecorder(stream, options);
+      mediaRecorderRef.current = recorder;
+      const chunks = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+
+      recorder.onstop = () => {
+        if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+        canvasRef.current = null;
+        
+        const blob = new Blob(chunks, { type: selectedMimeType || 'video/webm' });
+        setRecordingBlob(blob);
+        setShowSavePrompt(true);
+        setIsRecording(false);
+      };
+
+      recorder.start(); 
+      
+      setIsRecording(true);
+      setError(null);
+
+    } catch (err) {
+      console.error("Recording init error:", err);
+      setError("Recording failed: " + err.message);
+      setTimeout(() => setError(null), 3000);
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+  };
+
+  const downloadRecording = () => {
+    if (!recordingBlob) return;
+    const blobUrl = URL.createObjectURL(recordingBlob);
+    const a = document.createElement('a');
+    a.style.display = 'none';
+    a.href = blobUrl;
+    
+    const ext = mediaRecorderRef.current?.mimeType.includes('mp4') ? 'mp4' : 'webm';
+    a.download = `${title.replace(/[^a-z0-9]/gi, '_')}_60fps.${ext}`;
+    
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+    }, 100);
+    
+    setShowSavePrompt(false);
+    setRecordingBlob(null);
+  };
+
+  const discardRecording = () => {
+    setRecordingBlob(null);
+    setShowSavePrompt(false);
+  };
+
+  // ── Cast functions ──
+  const startCast = async () => {
+    const code = castCode.replace(/\D/g, '');
+    if (code.length !== 6) { setCastStatus('Inserisci un codice valido a 6 cifre'); return; }
+    const video = videoRef.current;
+    if (!video) return;
+    setCastStatus('Connessione...');
+    try {
+      await loadPeerJS();
+    } catch (e) { setCastStatus('Impossibile caricare la libreria di rete.'); return; }
+
+    // Capture stream from video element
+    let stream = null;
+    try {
+      stream = video.captureStream ? video.captureStream() : video.mozCaptureStream ? video.mozCaptureStream() : null;
+    } catch (e) {}
+    if (!stream || stream.getVideoTracks().length === 0) {
+      setCastStatus('Impossibile catturare lo stream del canale. Riprova dopo il caricamento.'); return;
+    }
+
+    const svc = new CastService();
+    castServiceRef.current = svc;
+    try {
+      await svc.connectAndStream(code, stream);
+      setIsCasting(true);
+      setCastStatus('In trasmissione su ' + code.slice(0,3) + ' ' + code.slice(3));
+    } catch (e) {
+      svc.destroy();
+      castServiceRef.current = null;
+      setCastStatus('Connessione fallita. Verifica il codice e riprova.');
+    }
+  };
+
+  const stopCast = () => {
+    if (castServiceRef.current) { castServiceRef.current.destroy(); castServiceRef.current = null; }
+    setIsCasting(false);
+    setCastStatus('');
+    setCastCode('');
+    setShowCastModal(false);
+  };
+
+  return (
+    React.createElement('div', {
+      ref: containerRef,
+      className: "relative w-full h-full bg-black group overflow-hidden flex items-center justify-center rounded-2xl shadow-2xl border border-white/10",
+      onMouseMove: handleMouseMove,
+      onMouseLeave: () => isPlaying && !showSavePrompt && setControlsVisible(false)
+    },
+      React.createElement('video', {
+        ref: videoRef,
+        crossOrigin: "anonymous",
+        className: "w-full h-full object-contain will-change-transform transform-gpu",
+        playsInline: true,
+        onPlay: () => setIsPlaying(true),
+        onPause: () => setIsPlaying(false)
+      }),
+
+      // Loading Overlay
+      loading && React.createElement('div', {
+        className: "absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm z-20"
+      },
+        React.createElement(Loader2, { className: "w-12 h-12 text-blue-400 animate-spin mb-4" }),
+        React.createElement('p', { className: "text-white/80 font-light tracking-wide mb-6" }, "Connecting to stream..."),
+        React.createElement('button', {
+          onClick: onClose,
+          className: "flex items-center gap-2 px-5 py-2 bg-white/10 hover:bg-white/20 border border-white/10 rounded-full text-white/90 text-sm transition-all hover:scale-105"
+        },
+          React.createElement(X, { className: "w-4 h-4" }), " Cancel"
+        )
+      ),
+
+      // Save Prompt Overlay
+      showSavePrompt && React.createElement('div', {
+        className: "absolute inset-0 flex items-center justify-center bg-black/80 backdrop-blur-md z-40 p-6"
+      },
+        React.createElement('div', { className: "bg-[#1a1f35] border border-white/10 p-8 rounded-2xl shadow-2xl max-w-sm w-full text-center" },
+          React.createElement('div', { className: "w-16 h-16 bg-blue-500/20 rounded-full flex items-center justify-center mx-auto mb-4" },
+            React.createElement(Download, { className: "w-8 h-8 text-blue-400" })
+          ),
+          React.createElement('h3', { className: "text-xl font-bold text-white mb-2" }, "Recording Ready"),
+          React.createElement('p', { className: "text-white/50 text-sm mb-6" }, "Captured at high-framerate (60 FPS)."),
+          React.createElement('div', { className: "flex gap-3" },
+            React.createElement('button', {
+              onClick: discardRecording,
+              className: "flex-1 py-3 bg-white/5 hover:bg-white/10 border border-white/5 rounded-xl text-white/70 hover:text-red-400 transition-colors flex items-center justify-center gap-2"
+            },
+              React.createElement(Trash2, { className: "w-4 h-4" }), " Discard"
+            ),
+            React.createElement('button', {
+              onClick: downloadRecording,
+              className: "flex-1 py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2"
+            },
+              React.createElement(Download, { className: "w-4 h-4" }), " Save"
+            )
+          )
+        )
+      ),
+
+      // Error Overlay
+      error && React.createElement('div', {
+        className: "absolute inset-0 flex flex-col items-center justify-center bg-black/80 backdrop-blur-md z-30 p-6 text-center"
+      },
+        React.createElement(AlertCircle, { className: "w-12 h-12 text-red-500 mb-4" }),
+        React.createElement('p', { className: "text-red-400 font-medium mb-4 max-w-md" }, error),
+        React.createElement('div', { className: "flex gap-4" },
+          React.createElement('button', {
+            onClick: handleRetry,
+            className: "px-6 py-2 bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors"
+          }, "Retry"),
+          React.createElement('button', {
+            onClick: onClose,
+            className: "px-6 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors"
+          }, "Close")
+        )
+      ),
+
+      // Cast Modal Overlay
+      showCastModal && React.createElement('div', {
+        className: "absolute inset-0 flex items-center justify-center bg-black/80 backdrop-blur-md z-40 p-6"
+      },
+        React.createElement('div', { className: "bg-[#1a1f35] border border-white/10 p-8 rounded-2xl shadow-2xl max-w-sm w-full text-center" },
+          React.createElement('div', { className: "w-16 h-16 bg-purple-500/20 rounded-full flex items-center justify-center mx-auto mb-4" },
+            React.createElement(Cast, { className: "w-8 h-8 text-purple-400" })
+          ),
+          isCasting
+            ? React.createElement(React.Fragment, null,
+                React.createElement('h3', { className: "text-xl font-bold text-white mb-2" }, "In Trasmissione"),
+                React.createElement('p', { className: "text-white/60 text-sm mb-2" }, "Stream del canale inviato a:"),
+                React.createElement('p', { className: "text-purple-300 font-bold text-lg tracking-widest mb-6" }, castCode.replace(/\D/g,'').slice(0,3) + ' ' + castCode.replace(/\D/g,'').slice(3)),
+                React.createElement('div', { className: "flex items-center justify-center gap-2 mb-6" },
+                  React.createElement('div', { className: "w-2 h-2 bg-red-500 rounded-full animate-pulse" }),
+                  React.createElement('span', { className: "text-red-300 text-xs font-bold uppercase tracking-wider" }, "Live Cast")
+                ),
+                React.createElement('button', {
+                  onClick: stopCast,
+                  className: "w-full py-3 bg-red-500/20 hover:bg-red-500/30 border border-red-500/20 text-red-400 font-bold rounded-xl flex items-center justify-center gap-2"
+                },
+                  React.createElement(X, { className: "w-4 h-4" }), " Interrompi Cast"
+                )
+              )
+            : React.createElement(React.Fragment, null,
+                React.createElement('h3', { className: "text-xl font-bold text-white mb-2" }, "Cast su MirrorLink"),
+                React.createElement('p', { className: "text-white/50 text-sm mb-6" }, "Inserisci il codice a 6 cifre del dispositivo ricevente (MirrorLink → Ricevi)."),
+                React.createElement('input', {
+                  type: "text",
+                  inputMode: "numeric",
+                  maxLength: 6,
+                  placeholder: "000 000",
+                  value: castCode,
+                  onChange: (e) => { setCastCode(e.target.value.replace(/\D/g,'').slice(0,6)); setCastStatus(''); },
+                  className: "w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-center text-2xl font-bold text-white tracking-[0.25em] focus:outline-none focus:border-purple-500/50 mb-4"
+                }),
+                castStatus && React.createElement('p', { className: "text-sm text-yellow-400 mb-4" }, castStatus),
+                React.createElement('div', { className: "flex gap-3" },
+                  React.createElement('button', {
+                    onClick: () => { setShowCastModal(false); setCastStatus(''); setCastCode(''); },
+                    className: "flex-1 py-3 bg-white/5 hover:bg-white/10 border border-white/5 rounded-xl text-white/70 transition-colors"
+                  }, "Annulla"),
+                  React.createElement('button', {
+                    onClick: startCast,
+                    disabled: castCode.replace(/\D/g,'').length !== 6,
+                    className: "flex-1 py-3 bg-purple-600 hover:bg-purple-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold rounded-xl flex items-center justify-center gap-2"
+                  },
+                    React.createElement(Cast, { className: "w-4 h-4" }), " Trasmetti"
+                  )
+                )
+              )
+        )
+      ),
+
+      // Controls Overlay
+      React.createElement('div', {
+        className: `absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/40 transition-opacity duration-300 flex flex-col justify-between p-6 z-10 ${controlsVisible ? 'opacity-100' : 'opacity-0'}`
+      },
+        // Header
+        React.createElement('div', { className: "flex justify-between items-start" },
+          React.createElement('div', { className: "flex items-center gap-3" },
+            React.createElement('div', { className: "bg-black/30 backdrop-blur-md px-4 py-2 rounded-full border border-white/5" },
+              React.createElement('h2', { className: "text-white text-sm font-medium tracking-wide truncate max-w-[200px] md:max-w-md" }, title)
+            ),
+            isRecording && React.createElement('div', { className: "flex items-center gap-2 bg-red-500/20 backdrop-blur-md px-3 py-1.5 rounded-full border border-red-500/30 animate-pulse" },
+              React.createElement('div', { className: "w-2 h-2 bg-red-500 rounded-full" }),
+              React.createElement('span', { className: "text-red-200 text-xs font-bold uppercase tracking-wider" }, "REC (60FPS)")
+            ),
+            isCasting && React.createElement('div', { className: "flex items-center gap-2 bg-purple-500/20 backdrop-blur-md px-3 py-1.5 rounded-full border border-purple-500/30 animate-pulse" },
+              React.createElement(Cast, { className: "w-3 h-3 text-purple-300" }),
+              React.createElement('span', { className: "text-purple-200 text-xs font-bold uppercase tracking-wider" }, "CAST LIVE")
+            )
+          ),
+          onClose && React.createElement('button', {
+            onClick: onClose,
+            className: "p-2 bg-white/10 hover:bg-red-500/80 rounded-full transition-all backdrop-blur-md"
+          },
+            React.createElement(X, { className: "w-5 h-5 text-white" })
+          )
+        ),
+
+        // Center Play Button (only when paused)
+        !isPlaying && !loading && !error && !showSavePrompt && React.createElement('div', {
+          className: "absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"
+        },
+          React.createElement('button', {
+            onClick: togglePlay,
+            className: "p-6 bg-white/20 hover:bg-white/30 backdrop-blur-xl rounded-full transition-all transform hover:scale-110 border border-white/20 shadow-xl"
+          },
+            React.createElement(Play, { fill: "white", className: "w-12 h-12 text-white ml-1" })
+          )
+        ),
+
+        // Bottom Bar
+        React.createElement('div', { className: "flex items-center gap-4 bg-black/40 backdrop-blur-xl p-3 rounded-2xl border border-white/10" },
+          React.createElement('button', {
+            onClick: togglePlay,
+            className: "text-white hover:text-blue-400 transition-colors"
+          },
+            isPlaying
+              ? React.createElement(Pause, { className: "w-6 h-6", fill: "currentColor" })
+              : React.createElement(Play, { className: "w-6 h-6", fill: "currentColor" })
+          ),
+
+          React.createElement('div', { className: "flex items-center gap-2 group/vol" },
+            React.createElement('button', {
+              onClick: toggleMute,
+              className: "text-white hover:text-blue-400 transition-colors"
+            },
+              (isMuted || volume === 0)
+                ? React.createElement(VolumeX, { className: "w-6 h-6" })
+                : React.createElement(Volume2, { className: "w-6 h-6" })
+            ),
+            React.createElement('input', {
+              type: "range",
+              min: "0",
+              max: "1",
+              step: "0.05",
+              value: isMuted ? 0 : volume,
+              onChange: handleVolumeChange,
+              className: "w-0 overflow-hidden group-hover/vol:w-24 transition-all duration-300 h-1 bg-white/30 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full"
+            })
+          ),
+
+          React.createElement('div', { className: "flex-1" }),
+
+          React.createElement('div', { className: "flex items-center gap-4" },
+            // Record Button
+            React.createElement('button', {
+              onClick: isRecording ? stopRecording : startRecording,
+              className: `flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all ${isRecording ? 'bg-red-500 text-white border-red-400 shadow-[0_0_15px_rgba(239,68,68,0.5)]' : 'bg-white/10 text-white/80 border-white/10 hover:bg-white/20 hover:text-white'}`,
+              title: "Record Stream"
+            },
+              isRecording
+                ? React.createElement(StopCircle, { className: "w-4 h-4 fill-current" })
+                : React.createElement(Disc, { className: "w-4 h-4" }),
+              React.createElement('span', { className: "text-xs font-bold uppercase hidden md:inline" }, isRecording ? 'Stop' : 'Rec')
+            ),
+
+            // Cast Button
+            React.createElement('button', {
+              onClick: () => setShowCastModal(true),
+              className: `flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all ${isCasting ? 'bg-purple-500 text-white border-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.5)]' : 'bg-white/10 text-white/80 border-white/10 hover:bg-white/20 hover:text-white'}`,
+              title: "Cast su MirrorLink"
+            },
+              React.createElement(Cast, { className: "w-4 h-4" }),
+              React.createElement('span', { className: "text-xs font-bold uppercase hidden md:inline" }, isCasting ? 'Live' : 'Cast')
+            ),
+
+            React.createElement('div', { className: "w-px h-4 bg-white/20" }),
+
+            React.createElement('div', { className: "flex items-center gap-2" },
+              React.createElement('span', { className: "text-xs text-white/60 uppercase tracking-wider font-semibold" }, "Live"),
+              React.createElement('div', { className: "w-2 h-2 bg-red-500 rounded-full animate-pulse" })
+            ),
+
+            React.createElement('button', {
+              onClick: toggleFullscreen,
+              className: "text-white hover:text-blue-400 transition-colors"
+            },
+              isFullscreen
+                ? React.createElement(Minimize, { className: "w-6 h-6" })
+                : React.createElement(Maximize, { className: "w-6 h-6" })
+            )
+          )
+        )
+      )
+    )
+  );
+};
+
+// --- Helpers ---
+
+const fetchPlaylistContent = async (url) => {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000); 
+    
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    
+    if (res.ok) {
+      return await res.text();
+    }
+    throw new Error("Direct fetch failed");
+  } catch (e) {
+    console.warn("Direct fetch failed, attempting CORS proxy...", e);
+    try {
+      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+      const res = await fetch(proxyUrl);
+      if (!res.ok) throw new Error("Proxy fetch failed");
+      return await res.text();
+    } catch (proxyError) {
+      throw new Error("Failed to load playlist. The URL might be offline, geo-blocked, or the CORS proxy is unavailable.");
+    }
+  }
+};
+
+// --- GlassCard Component ---
+const GlassCard = ({ children, className = '', onClick, style }) => (
+  React.createElement('div', {
+    onClick,
+    style,
+    className: `
+      relative overflow-hidden
+      bg-white/[0.03] backdrop-blur-md border border-white/5 shadow-lg 
+      rounded-2xl transition-all duration-300 ease-out
+      hover:bg-white/[0.08] hover:border-white/20 hover:shadow-[0_0_30px_rgba(59,130,246,0.15)] hover:-translate-y-1.5
+      group
+      ${className}
+    `
+  },
+    React.createElement('div', {
+      className: "absolute inset-0 bg-gradient-to-tr from-white/0 via-white/[0.05] to-white/0 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"
+    }),
+    children
+  )
+);
+
+// --- GlassButton Component ---
+const GlassButton = ({ children, onClick, active, icon: Icon, className = '', style }) => (
+  React.createElement('button', {
+    onClick,
+    style,
+    className: `
+      flex items-center gap-3 w-full px-4 py-3 rounded-xl text-left transition-all duration-300
+      ${active 
+        ? 'bg-blue-600/30 border border-blue-400/30 text-white shadow-[0_0_20px_rgba(37,99,235,0.3)]' 
+        : 'hover:bg-white/5 text-white/70 hover:text-white border border-transparent'}
+      ${className}
+    `
+  },
+    Icon && React.createElement(Icon, { className: `w-5 h-5 flex-shrink-0 ${active ? 'text-blue-400' : ''}` }),
+    React.createElement('span', { className: "font-medium tracking-wide text-sm truncate" }, children)
+  )
+);
+
+// --- Virtualized Channel Grid Row Component ---
+
+const ChannelRow = ({ index, style, data }) => {
+  const { channels, columnCount, favorites, toggleFavorite, onChannelClick } = data;
+  const startIndex = index * columnCount;
+  const rowChannels = channels.slice(startIndex, startIndex + columnCount);
+
+  return (
+    React.createElement('div', { style, className: "px-8 md:px-12 box-border" },
+      React.createElement('div', { className: "flex gap-6 w-full h-full items-start" },
+        rowChannels.map((channel) => (
+          React.createElement('div', { key: channel.id, className: "flex-1 min-w-0", style: { height: '130px' } },
+            React.createElement(GlassCard, {
+              className: "h-full flex items-center px-5 py-4 cursor-pointer",
+              onClick: () => onChannelClick(channel)
+            },
+              // Logo / Placeholder
+              React.createElement('div', {
+                className: "w-14 h-14 rounded-2xl bg-black/40 flex items-center justify-center flex-shrink-0 mr-4 border border-white/5 relative z-10 shadow-xl group-hover:scale-105 transition-transform duration-300"
+              },
+                channel.logo
+                  ? React.createElement('img', {
+                      src: channel.logo,
+                      alt: channel.name,
+                      className: "w-full h-full object-contain p-1.5 rounded-xl",
+                      onError: (e) => (e.currentTarget.style.display = 'none')
+                    })
+                  : React.createElement('span', { className: "text-xl font-bold text-white/20" }, channel.name.substring(0,2).toUpperCase())
+              ),
+
+              // Info
+              React.createElement('div', { className: "flex-1 min-w-0 z-10 flex flex-col justify-center" },
+                React.createElement('h3', { className: "font-bold text-white/90 truncate group-hover:text-blue-300 transition-colors duration-300 text-base" }, channel.name),
+                React.createElement('div', { className: "flex items-center gap-2 mt-1.5" },
+                  React.createElement('span', { className: "text-[10px] font-bold uppercase tracking-widest text-white/40 bg-white/5 px-2 py-0.5 rounded-md border border-white/5 group-hover:border-white/10 transition-colors" }, channel.group)
+                )
+              ),
+
+              // Actions
+              React.createElement('button', {
+                onClick: (e) => toggleFavorite(e, channel.id),
+                className: `absolute top-3 right-3 p-2 rounded-full z-20 transition-all duration-300 ${favorites.includes(channel.id) ? 'text-pink-500 opacity-100 scale-110' : 'text-white/10 opacity-0 group-hover:opacity-100 hover:text-pink-400 hover:scale-110 hover:bg-white/5'}`
+              },
+                React.createElement(Heart, { className: `w-4 h-4 ${favorites.includes(channel.id) ? 'fill-current' : ''}` })
+              ),
+              
+              // Decorative BG Icon
+              React.createElement(Play, {
+                strokeWidth: 1.5,
+                className: "absolute -bottom-6 -right-6 w-48 h-48 text-white/[0.01] transition-all duration-500 ease-out group-hover:text-blue-500/10 group-hover:scale-105 group-hover:-translate-y-2 group-hover:-translate-x-2"
+              })
+            )
+          )
+        )),
+        // Spacer for incomplete rows
+        Array.from({ length: columnCount - rowChannels.length }).map((_, i) => (
+          React.createElement('div', { key: `spacer-${i}`, className: "flex-1 min-w-0", style: { height: '130px' } })
+        ))
+      )
+    )
+  );
+};
+
+// --- Main App ---
+
+const App = () => {
+  const [playlists, setPlaylists] = useState([]);
+  const [activePlaylistId, setActivePlaylistId] = useState(null);
+  const [playlistData, setPlaylistData] = useState(null);
+  
+  const [currentChannel, setCurrentChannel] = useState(null);
+  const [activeGroup, setActiveGroup] = useState('All');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [favorites, setFavorites] = useState([]);
+  const [showSidebar, setShowSidebar] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
+  const [showPlaylistSelector, setShowPlaylistSelector] = useState(false);
+
+  const [m3uInput, setM3uInput] = useState('');
+  const [playlistNameInput, setPlaylistNameInput] = useState('');
+
+  // --- Persistence + Default Playlist ---
+  const DEFAULT_PLAYLIST = {
+    id: 'pl-default-freetv',
+    name: 'Playlist 1',
+    type: 'url',
+    url: 'https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8',
+    dateAdded: 0,
+  };
+
+  useEffect(() => {
+    const savedFavs = localStorage.getItem('ls_favorites');
+    if (savedFavs) setFavorites(JSON.parse(savedFavs));
+
+    const savedPlaylists = localStorage.getItem('ls_playlists');
+    let loadedPlaylists = [];
+    if (savedPlaylists) {
+      try {
+        loadedPlaylists = JSON.parse(savedPlaylists);
+      } catch (e) {
+        console.error("Failed to load playlists", e);
+      }
+    }
+
+    // Inject default playlist if not already present
+    const hasDefault = loadedPlaylists.some(p => p.id === DEFAULT_PLAYLIST.id);
+    if (!hasDefault) {
+      loadedPlaylists = [DEFAULT_PLAYLIST, ...loadedPlaylists];
+      try {
+        localStorage.setItem('ls_playlists', JSON.stringify(loadedPlaylists));
+      } catch (e) {}
+    }
+
+    setPlaylists(loadedPlaylists);
+
+    // Auto-load: select default if no active playlist saved
+    const savedActiveId = localStorage.getItem('ls_activePlaylistId');
+    const idToLoad = savedActiveId || DEFAULT_PLAYLIST.id;
+    const playlistToLoad = loadedPlaylists.find(p => p.id === idToLoad) || loadedPlaylists[0];
+
+    if (playlistToLoad) {
+      setIsLoading(true);
+      setActivePlaylistId(playlistToLoad.id);
+      fetchPlaylistContent(playlistToLoad.url)
+        .then(text => {
+          const parsed = parseM3U(text);
+          if (parsed.channels.length > 0) {
+            setPlaylistData(parsed);
+            setActiveGroup('All');
+          }
+        })
+        .catch(e => console.error("Auto-load failed:", e))
+        .finally(() => setIsLoading(false));
+    }
+  }, []);
+
+  const updatePlaylists = (newPlaylists) => {
+    setPlaylists(newPlaylists);
+    try {
+      localStorage.setItem('ls_playlists', JSON.stringify(newPlaylists));
+    } catch (e) {
+      alert("Storage limit reached.");
+    }
+  };
+
+  // --- Logic ---
+  const parseAndSetData = (content) => {
+    try {
+      const parsed = parseM3U(content);
+      if (parsed.channels.length === 0) throw new Error("No channels found.");
+      setPlaylistData(parsed);
+      setActiveGroup('All');
+    } catch (e) {
+      alert("Failed to parse playlist.");
+    }
+  };
+
+  const selectPlaylist = async (id) => {
+    const playlist = playlists.find(p => p.id === id);
+    if (!playlist) return;
+    if (activePlaylistId === id && playlistData) return;
+
+    setIsLoading(true);
+    setActivePlaylistId(id);
+    try { localStorage.setItem('ls_activePlaylistId', id); } catch(e) {}
+    
+    try {
+      if (playlist.type === 'url' && playlist.url) {
+        const text = await fetchPlaylistContent(playlist.url);
+        parseAndSetData(text);
+      } else if (playlist.type === 'file' && playlist.content) {
+        parseAndSetData(playlist.content);
+      }
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleAddPlaylist = async (type, content, name) => {
+    if (!content) return;
+    setIsLoading(true);
+    const newId = `pl-${Date.now()}`;
+    const finalName = name || `Playlist ${playlists.length + 1}`;
+
+    const newPlaylist = {
+      id: newId,
+      name: finalName,
+      type,
+      dateAdded: Date.now(),
+      ...(type === 'url' ? { url: content } : { content }),
+    };
+
+    try {
+      let rawData = content;
+      if (type === 'url') rawData = await fetchPlaylistContent(content);
+      
+      const parsed = parseM3U(rawData);
+      if (parsed.channels.length === 0) throw new Error("No channels found.");
+
+      const updatedList = [...playlists, newPlaylist];
+      updatePlaylists(updatedList);
+      setActivePlaylistId(newId);
+      setPlaylistData(parsed);
+      setActiveGroup('All');
+      setM3uInput('');
+      setPlaylistNameInput('');
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleDeletePlaylist = (e, id) => {
+    e.stopPropagation();
+    if (confirm("Remove playlist?")) {
+      const updated = playlists.filter(p => p.id !== id);
+      updatePlaylists(updated);
+      if (activePlaylistId === id) {
+        setActivePlaylistId(null);
+        setPlaylistData(null);
+      }
+    }
+  };
+
+  const handleFileUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => handleAddPlaylist('file', event.target?.result, file.name.replace(/\.[^/.]+$/, ""));
+      reader.readAsText(file);
+    }
+    e.target.value = '';
+  };
+
+  // --- Filtering ---
+  const filteredChannels = useMemo(() => {
+    if (!playlistData) return [];
+    let channels = playlistData.channels;
+
+    if (activeGroup === 'Favorites') {
+      channels = channels.filter(c => favorites.includes(c.id));
+    } else if (activeGroup !== 'All') {
+      channels = channels.filter(c => c.group === activeGroup);
+    }
+
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      channels = channels.filter(c => c.name.toLowerCase().includes(q));
+    }
+    return channels;
+  }, [playlistData, activeGroup, searchQuery, favorites]);
+
+  const visibleGroups = useMemo(() => {
+    return playlistData ? ['All', 'Favorites', ...playlistData.groups] : [];
+  }, [playlistData]);
+
+  const toggleFavorite = (e, channelId) => {
+    e.stopPropagation();
+    setFavorites(prev => prev.includes(channelId) ? prev.filter(id => id !== channelId) : [...prev, channelId]);
+    const newFavs = favorites.includes(channelId) ? favorites.filter(id => id !== channelId) : [...favorites, channelId];
+    localStorage.setItem('ls_favorites', JSON.stringify(newFavs));
+  };
+
+  // --- Virtualization Helpers ---
+  const getColumnCount = (width) => {
+    if (width < 640) return 1;
+    if (width < 1024) return 2;
+    if (width < 1280) return 3;
+    if (width < 1536) return 4;
+    return 5;
+  };
+
+  return (
+    React.createElement('div', { className: "relative h-[100dvh] w-full text-white overflow-hidden flex flex-col md:flex-row" },
+      React.createElement('div', { className: "mesh-bg" }),
+      React.createElement('div', { className: "blob blob-1" }),
+      React.createElement('div', { className: "blob blob-2" }),
+      React.createElement('div', { className: "blob blob-3" }),
+      
+      // Mobile Header
+      playlistData && React.createElement('div', {
+        className: "md:hidden flex-shrink-0 fixed top-0 left-0 right-0 z-40 bg-black/40 backdrop-blur-xl border-b border-white/10 p-4 flex justify-between items-center"
+      },
+        React.createElement('button', {
+          onClick: () => setShowSidebar(!showSidebar),
+          className: "p-2 text-white/80"
+        }, React.createElement(Menu, null)),
+        React.createElement('span', { className: "font-bold text-lg" }, "LiquidStream"),
+        React.createElement('div', { className: "w-8" })
+      ),
+
+      // Sidebar
+      playlistData && React.createElement('div', {
+        className: `fixed md:relative z-30 w-80 h-[100dvh] flex flex-col flex-shrink-0 bg-black/20 backdrop-blur-2xl border-r border-white/10 transition-transform duration-300 ease-in-out ${showSidebar ? 'translate-x-0' : '-translate-x-full md:translate-x-0'} pt-20 md:pt-0`
+      },
+        // Sidebar Fixed Header
+        React.createElement('div', { className: "p-6 pb-2 flex-shrink-0" },
+          React.createElement('div', { className: "flex items-center gap-3 mb-6" },
+            React.createElement('div', { className: "w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center shadow-lg" },
+              React.createElement(Tv, { className: "w-5 h-5 text-white" })
+            ),
+            React.createElement('h1', { className: "font-bold text-xl tracking-tight" }, "LiquidStream")
+          ),
+
+          React.createElement('div', { className: "relative mb-4" },
+            React.createElement('button', {
+              onClick: () => setShowPlaylistSelector(!showPlaylistSelector),
+              className: "w-full flex items-center justify-between bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl px-4 py-3 transition-all"
+            },
+              React.createElement('div', { className: "flex items-center gap-2 overflow-hidden" },
+                React.createElement(FolderOpen, { className: "w-4 h-4 text-blue-400" }),
+                React.createElement('span', { className: "text-sm font-medium truncate" }, playlists.find(p => p.id === activePlaylistId)?.name || 'Select')
+              ),
+              React.createElement(ChevronDown, { className: `w-4 h-4 transition-transform ${showPlaylistSelector ? 'rotate-180' : ''}` })
+            ),
+            showPlaylistSelector && React.createElement('div', {
+              className: "absolute top-full left-0 right-0 mt-2 bg-[#1a1f35] border border-white/10 rounded-xl shadow-2xl z-50 overflow-hidden backdrop-blur-3xl"
+            },
+              React.createElement('div', { className: "max-h-48 overflow-y-auto glass-scroll" },
+                playlists.map(p => (
+                  React.createElement('div', {
+                    key: p.id,
+                    onClick: () => { selectPlaylist(p.id); setShowPlaylistSelector(false); },
+                    className: "flex justify-between px-4 py-3 hover:bg-white/5 cursor-pointer group"
+                  },
+                    React.createElement('span', { className: `text-sm truncate ${activePlaylistId === p.id ? 'text-white' : 'text-white/60'}` }, p.name),
+                    React.createElement('button', {
+                      onClick: (e) => handleDeletePlaylist(e, p.id),
+                      className: "opacity-0 group-hover:opacity-100 hover:text-red-400"
+                    }, React.createElement(Trash2, { className: "w-3.5 h-3.5" }))
+                  )
+                )),
+                React.createElement('div', { className: "p-2 border-t border-white/10 bg-black/20" },
+                  React.createElement('button', {
+                    onClick: () => { setActivePlaylistId(null); setPlaylistData(null); setShowPlaylistSelector(false); },
+                    className: "w-full py-2 text-blue-400 hover:bg-blue-600/20 rounded-lg text-xs font-bold flex justify-center gap-2"
+                  },
+                    React.createElement(Plus, { className: "w-3 h-3" }), " Add New"
+                  )
+                )
+              )
+            )
+          ),
+
+          React.createElement('div', { className: "relative" },
+            React.createElement(Search, { className: "absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/40" }),
+            React.createElement('input', {
+              type: "text",
+              placeholder: "Search...",
+              className: "w-full bg-white/5 border border-white/10 rounded-xl py-2.5 pl-10 pr-4 text-sm focus:outline-none focus:border-blue-500/50 transition-all placeholder-white/30",
+              value: searchQuery,
+              onChange: (e) => setSearchQuery(e.target.value)
+            })
+          ),
+
+          React.createElement('div', { className: "pt-4 pb-2" },
+            React.createElement('h3', { className: "text-xs font-bold text-white/40 uppercase tracking-widest" }, "Categories")
+          )
+        ),
+
+        // Sidebar Scrollable Content
+        React.createElement('div', { className: "flex-1 overflow-y-auto glass-scroll px-4 pb-10 min-h-0" },
+          React.createElement('div', { className: "space-y-1" },
+            visibleGroups.map(group => (
+              React.createElement(GlassButton, {
+                key: group,
+                onClick: () => { setActiveGroup(group); setCurrentChannel(null); if(window.innerWidth < 768) setShowSidebar(false); },
+                active: activeGroup === group,
+                icon: group === 'Favorites' ? Heart : undefined,
+                className: activeGroup === group ? '' : 'opacity-80'
+              },
+                React.createElement('div', { className: "flex justify-between w-full" },
+                  React.createElement('span', null, group),
+                  group === 'All' && React.createElement('span', { className: "text-xs bg-white/10 px-2 py-0.5 rounded-full text-white/60" }, playlistData?.channels.length || 0)
+                )
+              )
+            ))
+          )
+        )
+      ),
+
+      // Main Content
+      React.createElement('div', { className: "flex-1 h-full overflow-hidden flex flex-col relative pt-16 md:pt-0" },
+        !playlistData
+          ? React.createElement('div', { className: "flex-1 overflow-y-auto p-4 flex flex-col items-center justify-center w-full" },
+              React.createElement(GlassCard, { className: "w-full max-w-xl p-8 md:p-10 flex flex-col items-center" },
+                React.createElement('div', { className: "w-16 h-16 bg-gradient-to-tr from-blue-500 to-purple-500 rounded-2xl flex items-center justify-center mb-6 shadow-lg shadow-blue-500/30" },
+                  React.createElement(Plus, { className: "w-8 h-8 text-white" })
+                ),
+                React.createElement('h2', { className: "text-3xl font-bold mb-2" }, "Add Playlist"),
+                React.createElement('p', { className: "text-white/50 text-center mb-8" }, "Load M3U URL or upload file."),
+                React.createElement('div', { className: "w-full space-y-4" },
+                  React.createElement('input', {
+                    type: "text",
+                    placeholder: "Playlist Name",
+                    className: "w-full px-4 py-3 bg-black/20 border border-white/10 rounded-xl focus:outline-none text-white",
+                    value: playlistNameInput,
+                    onChange: (e) => setPlaylistNameInput(e.target.value)
+                  }),
+                  React.createElement('div', { className: "relative" },
+                    React.createElement(LinkIcon, { className: "absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-white/40" }),
+                    React.createElement('input', {
+                      type: "text",
+                      placeholder: "https://...",
+                      className: "w-full pl-12 pr-4 py-3 bg-black/20 border border-white/10 rounded-xl focus:outline-none text-white",
+                      value: m3uInput,
+                      onChange: (e) => setM3uInput(e.target.value)
+                    })
+                  ),
+                  React.createElement('div', { className: "flex gap-3 pt-2" },
+                    React.createElement('button', {
+                      onClick: () => handleAddPlaylist('url', m3uInput, playlistNameInput),
+                      disabled: isLoading || !m3uInput,
+                      className: "flex-1 py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl flex items-center justify-center gap-2"
+                    }, isLoading ? React.createElement(Loader2, { className: "animate-spin" }) : 'Load URL'),
+                    React.createElement('label', { className: "flex-1 cursor-pointer" },
+                      React.createElement('input', { type: "file", onChange: handleFileUpload, className: "hidden" }),
+                      React.createElement('div', { className: "flex items-center justify-center gap-2 w-full h-full py-3 bg-white/10 border border-white/10 text-white font-bold rounded-xl hover:bg-white/20 cursor-pointer" },
+                        isLoading ? React.createElement(Loader2, { className: "animate-spin" }) : React.createElement(React.Fragment, null, React.createElement(Upload, { size: 18 }), " File")
+                      )
+                    )
+                  )
+                )
+              ),
+              playlists.length > 0 && React.createElement('div', { className: "mt-8 w-full max-w-xl grid grid-cols-1 md:grid-cols-2 gap-4" },
+                playlists.map(p => (
+                  React.createElement(GlassButton, { key: p.id, onClick: () => selectPlaylist(p.id), icon: Tv, className: "bg-white/5" }, p.name)
+                ))
+              )
+            )
+          : React.createElement(React.Fragment, null,
+              // Virtualized Channel Grid
+              React.createElement('div', { className: "flex-1 overflow-hidden p-0" },
+                React.createElement('div', { className: "h-full w-full px-6 md:px-8 py-6 flex flex-col" },
+                  React.createElement('div', { className: "flex-shrink-0 mb-6" },
+                    React.createElement('h2', { className: "text-2xl font-bold" }, activeGroup),
+                    React.createElement('p', { className: "text-white/40 text-sm mt-1" }, `${filteredChannels.length} Channels`)
+                  ),
+                  React.createElement('div', { className: "flex-1 min-h-0" },
+                    filteredChannels.length === 0
+                      ? React.createElement('div', { className: "flex flex-col items-center justify-center h-full text-white/30" },
+                          React.createElement(Tv, { className: "w-16 h-16 mb-4 opacity-20" }),
+                          React.createElement('p', null, "No channels found")
+                        )
+                      : React.createElement(AutoSizer, null,
+                          ({ height, width }) => {
+                            const columnCount = getColumnCount(width);
+                            const rowCount = Math.ceil(filteredChannels.length / columnCount);
+                            const ROW_HEIGHT = 170;
+                            
+                            return React.createElement(List, {
+                              height,
+                              itemCount: rowCount,
+                              itemSize: ROW_HEIGHT,
+                              width,
+                              className: "glass-scroll",
+                              itemData: {
+                                channels: filteredChannels,
+                                columnCount,
+                                favorites,
+                                toggleFavorite,
+                                onChannelClick: setCurrentChannel
+                              }
+                            }, ChannelRow);
+                          }
+                        )
+                  )
+                )
+              ),
+            
+              // Overlay Player
+              currentChannel && React.createElement('div', { className: "absolute inset-0 z-50 bg-black/90 backdrop-blur-md p-0 md:p-12 flex items-center justify-center" },
+                React.createElement('div', { className: "w-full h-full md:h-auto md:max-w-6xl md:aspect-video shadow-2xl relative bg-black rounded-2xl overflow-hidden border border-white/10" },
+                  React.createElement(VideoPlayer, { url: currentChannel.url, title: currentChannel.name, onClose: () => setCurrentChannel(null) })
+                )
+              )
+            )
+      )
+    )
+  );
+};
+
+// --- Mount ---
+const rootElement = document.getElementById('root');
+if (!rootElement) {
+  throw new Error("Could not find root element to mount to");
+}
+
+const root = ReactDOM.createRoot(rootElement);
+root.render(
+  React.createElement(React.StrictMode, null,
+    React.createElement(App, null)
+  )
+);
+</script>
+</body>
+</html>
